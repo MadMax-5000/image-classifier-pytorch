@@ -56,6 +56,7 @@ animal-faces/afhq/
     ├── 🐶 dog/
     └── 🦁 wild/
 ```
+<img width="478" height="389" alt="download" src="https://github.com/user-attachments/assets/7a4120f4-a25f-4ae9-b662-c2632aaabbba" />
 
 ---
 
