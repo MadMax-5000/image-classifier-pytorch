@@ -1,236 +1,217 @@
-
+import argparse
 import torch
-from torch import nn
-from torch.optim import Adam
-from torchvision.transforms import transforms
-from torch.utils.data import Dataset, DataLoader
-from sklearn.preprocessing import LabelEncoder
-import matplotlib.pyplot as plt
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import DataLoader
+from torchvision import transforms
 from PIL import Image
-import pandas as pd
-import numpy as np
-import os
-
-device = 'cuda' if torch.cuda.is_available() else "cpu"
-print(f'device available is {device}')
-
-image_path = []
-labels = []
-
-for i in os.listdir("/content/animal-faces/afhq"):
-    for label in os.listdir(f"/content/animal-faces/afhq/{i}"):
-        for image in os.listdir(f"/content/animal-faces/afhq/{i}/{label}"):
-            image_path.append(f"/content/animal-faces/afhq/{i}/{label}/{image}")
-            labels.append(label)
-df = pd.DataFrame(zip(image_path, labels), columns = ["image_path", "labels"])
-df.head()
-
-train = df.sample(frac = 0.7)
-test = df.drop(train.index)
-
-val = test.sample(frac = 0.5)
-test = test.drop(val.index)
-
-label_encoder = LabelEncoder()
-
-label_encoder.fit(df['labels'])
-
-transform = transforms.Compose([
-     transforms.Resize((128, 128)),
-     transforms.ToTensor(),
-     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
-
-train_transform = transforms.Compose([
-     transforms.Resize((128, 128)),
-     transforms.RandomHorizontalFlip(p=0.5),
-     transforms.RandomRotation(15),
-     transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-     transforms.ToTensor(),
-     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
-
-test_transform = transforms.Compose([
-     transforms.Resize((128, 128)),
-     transforms.ToTensor(),
-     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
-
-class CustomImageDataset(Dataset):
-    def __init__(self, dataframe, transform = None):
-        self.dataframe = dataframe
-        self.transform = transform
-        self.labels = torch.tensor(label_encoder.transform(dataframe['labels']))
-    def __len__(self):
-        return self.dataframe.shape[0]
-    def __getitem__(self, idx):
-        img_path = self.dataframe.iloc[idx, 0]
-        label = self.labels[idx]
-        image = Image.open(img_path).convert('RGB')
-        if self.transform:
-            image = self.transform(image).to(device)
-        return image, label
-
-train_dataset = CustomImageDataset(dataframe = train, transform = train_transform)
-val_dataset = CustomImageDataset(dataframe = val, transform = test_transform)
-test_dataset = CustomImageDataset(dataframe = test, transform = test_transform)
-
-# Plot random sample images to check if the dataset is loaded correctly
-n_rows = 3
-n_cols = 3
-
-f, axarr = plt.subplots(n_rows, n_cols)
-
-for row in range(n_rows):
-    for col in range(n_cols):
-        image = Image.open(df.sample(n = 1)["image_path"].iloc[0]).convert("RGB")
-        axarr[row, col].imshow(image)
-        axarr[row, col].axis("off")
-plt.show()
-
-LR = 1e-3
-BATCH_SIZE = 16
-EPOCHS = 50
-
-train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle = True)
-val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle = True)
-test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle = True)
-
-class Net(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.conv1 = nn.Conv2d(3, 32, kernel_size = 3, padding = 1)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size = 3, padding = 1)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size = 3, padding = 1)
-        self.bn3 = nn.BatchNorm2d(128)
-
-        self.pooling = nn.MaxPool2d(2,2)
-        self.relu = nn.ReLU()
-        self.flatten = nn.Flatten()
-        self.dropout = nn.Dropout(0.5)
-        self.linear = nn.Linear((128*16*16), 128)
-        self.output = nn.Linear(128, len(df['labels'].unique()))
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.pooling(x)
-
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = self.relu(x)
-        x = self.pooling(x)
-
-        x = self.conv3(x)
-        x = self.bn3(x)
-        x = self.relu(x)
-        x = self.pooling(x)
-
-        x = self.flatten(x)
-        x = self.dropout(x)
-        x = self.relu(self.linear(x))
-        x = self.output(x)
-
-        return x
-
-model = Net().to(device)
-
+import matplotlib.pyplot as plt
 from torchsummary import summary
-summary(model, input_size=(3, 128 , 128))
 
-criterion = nn.CrossEntropyLoss()
-optimizer = Adam(model.parameters(), lr = LR)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+import config
+from src import (
+    CustomImageDataset,
+    create_model,
+    evaluate,
+    freeze_backbone,
+    get_target_layer,
+    get_transforms,
+    load_data,
+    plot_gradcam,
+    predict,
+    split_data,
+    train,
+    visualize_feature_maps,
+)
 
-total_loss_train_plot = []
-total_loss_val_plot = []
-total_acc_train_plot = []
-total_acc_val_plot = []
 
-for epoch in range(EPOCHS):
-    model.train()
-    total_acc_train = 0
-    total_loss_train = 0
-    total_acc_val = 0
-    total_loss_val = 0
+def visualize_samples(df):
+    n_rows, n_cols = 3, 3
+    fig, axarr = plt.subplots(n_rows, n_cols)
+    for row in range(n_rows):
+        for col in range(n_cols):
+            image_path = df.sample(n=1)["image_path"].iloc[0]
+            image = Image.open(image_path).convert("RGB")
+            axarr[row, col].imshow(image)
+            axarr[row, col].axis("off")
+    plt.show()
 
-    for inputs, labels in train_loader:
-        inputs, labels = inputs.to(device), labels.to(device)
-        optimizer.zero_grad()
 
-        outputs = model(inputs)
-        train_loss = criterion(outputs, labels)
-        total_loss_train += train_loss.item()
+def plot_training_curves(history):
+    fig, axs = plt.subplots(1, 2, figsize=(15, 5))
 
-        train_loss.backward()
+    axs[0].plot(history["train_loss"], label="Train Loss")
+    axs[0].plot(history["val_loss"], label="Val Loss")
+    axs[0].set_title("Training and Validation Loss over Epochs")
+    axs[0].set_xlabel("Epochs")
+    axs[0].set_ylabel("Loss")
+    axs[0].legend()
 
-        train_acc = (torch.argmax(outputs, axis = 1) == labels).sum().item()
-        total_acc_train += train_acc
-        optimizer.step()
+    axs[1].plot(history["train_acc"], label="Train Accuracy")
+    axs[1].plot(history["val_acc"], label="Val Accuracy")
+    axs[1].set_title("Training and Validation Accuracy over Epochs")
+    axs[1].set_xlabel("Epochs")
+    axs[1].set_ylabel("Accuracy")
+    axs[1].legend()
+    plt.show()
+
+
+def generate_visualizations(model, test_dataset, label_encoder, model_name, device):
+    print("\nGenerating visualizations...")
+
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
+    images = []
+    targets = []
+
+    for img, label in test_loader:
+        if len(images) >= 3:
+            break
+        images.append(img[0])
+        targets.append(label[0].item())
+
+    sample_images = [test_dataset[i][0] for i in range(min(3, len(test_dataset)))]
+    sample_targets = [
+        test_dataset[i][1].item() for i in range(min(3, len(test_dataset)))
+    ]
+
+    try:
+        visualize_feature_maps(
+            model,
+            sample_images[0].to(device),
+            save_path="feature_maps.png",
+            device=device,
+        )
+    except Exception as e:
+        print(f"Could not generate feature maps: {e}")
+
+    try:
+        target_layer = get_target_layer(model, model_name)
+        if target_layer is not None:
+            plot_gradcam(
+                model,
+                sample_images[:3],
+                sample_targets[:3],
+                list(label_encoder.classes_),
+                target_layer,
+                save_path="gradcam_samples.png",
+                device=device,
+            )
+    except Exception as e:
+        print(f"Could not generate Grad-CAM: {e}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Animal Face Classifier")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=config.MODEL_NAME,
+        choices=["custom", "resnet18", "resnet34", "efficientnet_b0"],
+        help="Model architecture to use",
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=config.EPOCHS, help="Number of training epochs"
+    )
+    parser.add_argument(
+        "--no-train", action="store_true", help="Skip training, just run visualizations"
+    )
+    args = parser.parse_args()
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+    print(f"Model: {args.model}")
+
+    df, label_encoder = load_data(config.DATA_PATH)
+    train_df, val_df, test_df = split_data(df, config.TRAIN_SPLIT, config.VAL_SPLIT)
+
+    train_transform = get_transforms(config.IMG_SIZE, augment=True)
+    test_transform = get_transforms(config.IMG_SIZE, augment=False)
+
+    train_dataset = CustomImageDataset(train_df, train_transform, label_encoder)
+    val_dataset = CustomImageDataset(val_df, test_transform, label_encoder)
+    test_dataset = CustomImageDataset(test_df, test_transform, label_encoder)
+
+    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
+
+    if not args.no_train:
+        visualize_samples(df)
+
+    num_classes = len(df["labels"].unique())
+    print(f"Number of classes: {num_classes}")
+    print(f"Classes: {list(label_encoder.classes_)}")
+
+    model = create_model(args.model, num_classes, config.PRETRAINED, config.DROPOUT).to(
+        device
+    )
+
+    try:
+        summary(model, input_size=(3, config.IMG_SIZE, config.IMG_SIZE))
+    except Exception as e:
+        print(f"Could not print model summary: {e}")
+        print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+
+    if config.FREEZE_BACKBONE and args.model != "custom":
+        print("Freezing backbone (transfer learning mode)")
+        freeze_backbone(model, args.model)
+
+    if not args.no_train:
+        scheduler = ReduceLROnPlateau(
+            torch.optim.Adam(model.parameters(), lr=config.LR),
+            mode="min",
+            factor=config.SCHEDULER_FACTOR,
+            patience=config.PATIENCE,
+        )
+
+        history = train(
+            model,
+            train_loader,
+            val_loader,
+            args.epochs,
+            config.LR,
+            scheduler,
+            device,
+            early_stopping_patience=config.EARLY_STOPPING_PATIENCE,
+            save_best_path=config.BEST_MODEL_PATH,
+            save_best_only=config.SAVE_BEST_ONLY,
+        )
+
+        model.load_state_dict(torch.load(config.BEST_MODEL_PATH, weights_only=True))
+        print(f"Loaded best model from {config.BEST_MODEL_PATH}")
+
+        torch.save(model.state_dict(), config.MODEL_PATH)
+        print(f"Final model saved to {config.MODEL_PATH}")
+
+        test_loss, test_acc = evaluate(
+            model, test_loader, torch.nn.CrossEntropyLoss(), device
+        )
+        print(f"Test Accuracy: {test_acc:.2f}%, Test Loss: {test_loss:.4f}")
+
+        plot_training_curves(history)
+
+    generate_visualizations(model, test_dataset, label_encoder, args.model, device)
+
+
+def predict_image(
+    image_path: str,
+    model_path: str = config.BEST_MODEL_PATH,
+    model_name: str = config.MODEL_NAME,
+):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    df, label_encoder = load_data(config.DATA_PATH)
+    test_transform = get_transforms(config.IMG_SIZE, augment=False)
+
+    num_classes = len(df["labels"].unique())
+    model = create_model(model_name, num_classes, pretrained=False).to(device)
+    model.load_state_dict(torch.load(model_path, weights_only=True))
     model.eval()
-    with torch.no_grad():
-       for inputs, labels in val_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            outputs = model(inputs)
-            val_loss = criterion(outputs, labels)
-            total_loss_val += val_loss.item()
-            val_acc = (torch.argmax(outputs, axis = 1) == labels).sum().item()
-            total_acc_val += val_acc
-    total_loss_train_plot.append(round(total_loss_train / 1000, 4))
-    total_loss_val_plot.append(round(total_loss_val / 1000, 4))
-    total_acc_train_plot.append(round((total_acc_train/train_dataset.__len__())*100, 4))
-    total_acc_val_plot.append(round((total_acc_val/val_dataset.__len__())*100, 4))
 
-    print(f""" Epoch {epoch+1}, Train loss: {round(total_loss_train / 1000, 4)}, Val loss: {round(total_loss_val /1000, 4)} Train Accuracy = {round((total_acc_train/train_dataset.__len__())*100, 4)} %, Val Accuracy = {round((total_acc_val/val_dataset.__len__())*100, 4)} %""")
+    image = Image.open(image_path).convert("RGB")
+    image_tensor = test_transform(image)
 
-    scheduler.step(total_loss_val)
+    pred = predict(model, image_tensor, device)
+    return label_encoder.inverse_transform([pred])[0]
 
-torch.save(model.state_dict(), "my_model.pth")
-print("Model saved safely!")
 
-with torch.no_grad():
-    total_loss_test = 0
-    total_acc_test = 0
-    for inputs, labels in test_loader:
-        inputs, labels = inputs.to(device), labels.to(device)
-        predictions = model(inputs)
-
-        acc = (torch.argmax(predictions, axis = 1) == labels).sum().item()
-        loss = criterion(predictions, labels)
-        total_loss_test += loss.item()
-        total_acc_test += acc
-print(f"Accuracy score is : {round((total_acc_test/test_dataset.__len__()) * 100, 4)} and Loss is {round(total_loss_test/1000, 4)}")
-
-fig, axs = plt.subplots(1, 2, figsize = (15, 5))
-axs[0].plot(total_loss_train_plot, label = "Train Loss")
-axs[0].plot(total_loss_val_plot, label = "Val Loss")
-axs[0].set_title("Training and Validation Loss over Epochs")
-axs[0].set_xlabel("Epochs")
-axs[0].set_ylabel("Loss")
-axs[0].legend()
-
-axs[1].plot(total_acc_train_plot, label = "Train Accuracy")
-axs[1].plot(total_acc_val_plot, label = "Val Accuracy")
-axs[1].set_title("Training and Validation Accuracy over Epochs")
-axs[1].set_xlabel("Epochs")
-axs[1].set_ylabel("Accuracy")
-axs[1].legend()
-plt.show()
-
-# 1. reading the image
-# 2. transform the image with the transform object
-# 3. predict through the model
-# 4. inverse transform by label encoder
-def predict_image(image_path):
-    model.eval()  # Set to evaluation mode
-    image = Image.open(image_path).convert('RGB')
-    image = test_transform(image).to(device)  # Use test_transform with normalization
-    with torch.no_grad():
-        output = model(image.unsqueeze(0))
-        output = torch.argmax(output, axis=1).item()
-    return label_encoder.inverse_transform([output])[0]
-
-predict_image("/content/cat115.jpg")
+if __name__ == "__main__":
+    main()
