@@ -112,7 +112,11 @@ python app.py
 
 A convolution operation applies a filter $K$ to input $X$:
 
+<p align="center"><font size="4">
+
 $$Y_{i,j} = \sum_{m}\sum_{n} X_{i+m, j+n} \cdot K_{m,n}$$
+
+</font></p>
 
 Where:
 - $Y$ = output feature map
@@ -123,9 +127,13 @@ Where:
 
 Normalizes layer inputs to have zero mean and unit variance:
 
+<p align="center"><font size="4">
+
 $$\hat{x} = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}}$$
 
 $$y = \gamma\hat{x} + \beta$$
+
+</font></p>
 
 Where $\gamma, \beta$ are learnable scale and shift parameters.
 
@@ -133,7 +141,11 @@ Where $\gamma, \beta$ are learnable scale and shift parameters.
 
 For multi-class classification with $C$ classes:
 
+<p align="center"><font size="4">
+
 $$\mathcal{L}_{CE} = -\sum_{c=1}^{C} y_c \log(\hat{y}_c)$$
+
+</font></p>
 
 Where:
 - $y_c$ = ground truth label (one-hot)
@@ -143,13 +155,21 @@ Where:
 
 Converts logits to probabilities:
 
+<p align="center"><font size="4">
+
 $$\hat{y}_c = \frac{e^{z_c}}{\sum_{k=1}^{C} e^{z_k}}$$
+
+</font></p>
 
 ### Backpropagation
 
 Weights updated via gradient descent:
 
+<p align="center"><font size="4">
+
 $$w_{new} = w_{old} - \eta \cdot \frac{\partial \mathcal{L}}{\partial w}$$
+
+</font></p>
 
 Where $\eta$ = learning rate.
 
@@ -157,7 +177,11 @@ Where $\eta$ = learning rate.
 
 Training stops when validation loss doesn't improve for $p$ epochs:
 
+<p align="center"><font size="4">
+
 $$\text{stop if } \exists p \in [1, \text{patience}]: \mathcal{L}_{val}(t-p) < \mathcal{L}_{val}(t)$$
+
+</font></p>
 
 ---
 
@@ -228,7 +252,11 @@ After training, the following files are generated:
 
 Grad-CAM highlights regions in the image that are important for the CNN's prediction:
 
+<p align="center"><font size="4">
+
 $$L^c_{Grad-CAM} = ReLU\left(\sum_k \alpha_k^c \cdot A^k\right)$$
+
+</font></p>
 
 Where:
 - $A^k$ = feature map activations
