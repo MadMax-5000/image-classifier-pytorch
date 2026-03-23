@@ -25,48 +25,48 @@ from src import (
 
 
 def visualize_samples(df):
-    n_rows, n_cols = 3, 3
+    n_rows, n_cols = 4, 4
     fig, axarr = plt.subplots(n_rows, n_cols)
     for row in range(n_rows):
         for col in range(n_cols):
             image_path = df.sample(n=1)["image_path"].iloc[0]
             image = Image.open(image_path).convert("RGB")
             axarr[row, col].imshow(image)
+            axarr[row, col].set_title(image_path.split("\\")[-2], fontsize=8)
             axarr[row, col].axis("off")
+    plt.suptitle("Sample Images from Dataset", fontsize=14)
+    plt.tight_layout()
+    plt.savefig("sample_images.png", dpi=150, bbox_inches="tight")
     plt.show()
 
 
 def plot_training_curves(history):
     fig, axs = plt.subplots(1, 2, figsize=(15, 5))
 
-    axs[0].plot(history["train_loss"], label="Train Loss")
-    axs[0].plot(history["val_loss"], label="Val Loss")
+    axs[0].plot(history["train_loss"], label="Train Loss", marker="o")
+    axs[0].plot(history["val_loss"], label="Val Loss", marker="s")
     axs[0].set_title("Training and Validation Loss over Epochs")
     axs[0].set_xlabel("Epochs")
     axs[0].set_ylabel("Loss")
     axs[0].legend()
+    axs[0].grid(True, alpha=0.3)
 
-    axs[1].plot(history["train_acc"], label="Train Accuracy")
-    axs[1].plot(history["val_acc"], label="Val Accuracy")
+    axs[1].plot(history["train_acc"], label="Train Accuracy", marker="o")
+    axs[1].plot(history["val_acc"], label="Val Accuracy", marker="s")
     axs[1].set_title("Training and Validation Accuracy over Epochs")
     axs[1].set_xlabel("Epochs")
-    axs[1].set_ylabel("Accuracy")
+    axs[1].set_ylabel("Accuracy (%)")
     axs[1].legend()
+    axs[1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig("training_curves.png", dpi=150, bbox_inches="tight")
     plt.show()
+    print("Training curves saved to training_curves.png")
 
 
 def generate_visualizations(model, test_dataset, label_encoder, model_name, device):
     print("\nGenerating visualizations...")
-
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
-    images = []
-    targets = []
-
-    for img, label in test_loader:
-        if len(images) >= 3:
-            break
-        images.append(img[0])
-        targets.append(label[0].item())
 
     sample_images = [test_dataset[i][0] for i in range(min(3, len(test_dataset)))]
     sample_targets = [
@@ -100,7 +100,7 @@ def generate_visualizations(model, test_dataset, label_encoder, model_name, devi
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Animal Face Classifier")
+    parser = argparse.ArgumentParser(description="Animal Classifier")
     parser.add_argument(
         "--model",
         type=str,
@@ -112,34 +112,74 @@ def main():
         "--epochs", type=int, default=config.EPOCHS, help="Number of training epochs"
     )
     parser.add_argument(
+        "--batch-size", type=int, default=config.BATCH_SIZE, help="Batch size"
+    )
+    parser.add_argument("--lr", type=float, default=config.LR, help="Learning rate")
+    parser.add_argument(
         "--no-train", action="store_true", help="Skip training, just run visualizations"
+    )
+    parser.add_argument(
+        "--no-augment", action="store_true", help="Disable data augmentation"
     )
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
+    print(f"{'=' * 60}")
+    print(f"Animal Classifier Training")
+    print(f"{'=' * 60}")
+    print(f"Device: {device}")
     print(f"Model: {args.model}")
+    print(f"Epochs: {args.epochs}")
+    print(f"Batch size: {args.batch_size}")
+    print(f"Learning rate: {args.lr}")
+    print(f"{'=' * 60}\n")
 
     df, label_encoder = load_data(config.DATA_PATH)
-    train_df, val_df, test_df = split_data(df, config.TRAIN_SPLIT, config.VAL_SPLIT)
+    train_df, val_df, test_df = split_data(
+        df, config.TRAIN_SPLIT, config.VAL_SPLIT, config.RANDOM_SEED
+    )
 
-    train_transform = get_transforms(config.IMG_SIZE, augment=True)
+    print(f"Dataset loaded from: {config.DATA_PATH}")
+    print(f"Total images: {len(df)}")
+    print(f"Number of classes: {len(df['labels'].unique())}")
+    print(f"Classes: {', '.join(sorted(label_encoder.classes_))}")
+    print(f"\nSplit: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
+
+    train_transform = get_transforms(config.IMG_SIZE, augment=not args.no_augment)
     test_transform = get_transforms(config.IMG_SIZE, augment=False)
 
     train_dataset = CustomImageDataset(train_df, train_transform, label_encoder)
     val_dataset = CustomImageDataset(val_df, test_transform, label_encoder)
     test_dataset = CustomImageDataset(test_df, test_transform, label_encoder)
 
-    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True,
+    )
 
     if not args.no_train:
+        print("\nVisualizing sample images...")
         visualize_samples(df)
 
     num_classes = len(df["labels"].unique())
-    print(f"Number of classes: {num_classes}")
-    print(f"Classes: {list(label_encoder.classes_)}")
+    print(f"\nCreating model: {args.model} with {num_classes} classes...")
 
     model = create_model(args.model, num_classes, config.PRETRAINED, config.DROPOUT).to(
         device
@@ -150,6 +190,8 @@ def main():
     except Exception as e:
         print(f"Could not print model summary: {e}")
         print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Trainable parameters: {trainable:,}")
 
     if config.FREEZE_BACKBONE and args.model != "custom":
         print("Freezing backbone (transfer learning mode)")
@@ -157,18 +199,22 @@ def main():
 
     if not args.no_train:
         scheduler = ReduceLROnPlateau(
-            torch.optim.Adam(model.parameters(), lr=config.LR),
+            torch.optim.Adam(model.parameters(), lr=args.lr),
             mode="min",
             factor=config.SCHEDULER_FACTOR,
             patience=config.PATIENCE,
         )
+
+        print(f"\n{'=' * 60}")
+        print("Starting training...")
+        print(f"{'=' * 60}\n")
 
         history = train(
             model,
             train_loader,
             val_loader,
             args.epochs,
-            config.LR,
+            args.lr,
             scheduler,
             device,
             early_stopping_patience=config.EARLY_STOPPING_PATIENCE,
@@ -177,7 +223,7 @@ def main():
         )
 
         model.load_state_dict(torch.load(config.BEST_MODEL_PATH, weights_only=True))
-        print(f"Loaded best model from {config.BEST_MODEL_PATH}")
+        print(f"\nLoaded best model from {config.BEST_MODEL_PATH}")
 
         torch.save(model.state_dict(), config.MODEL_PATH)
         print(f"Final model saved to {config.MODEL_PATH}")
@@ -185,32 +231,19 @@ def main():
         test_loss, test_acc = evaluate(
             model, test_loader, torch.nn.CrossEntropyLoss(), device
         )
-        print(f"Test Accuracy: {test_acc:.2f}%, Test Loss: {test_loss:.4f}")
+        print(f"\n{'=' * 60}")
+        print(f"Final Test Results:")
+        print(f"  Test Accuracy: {test_acc:.2f}%")
+        print(f"  Test Loss: {test_loss:.4f}")
+        print(f"{'=' * 60}")
 
         plot_training_curves(history)
 
     generate_visualizations(model, test_dataset, label_encoder, args.model, device)
 
-
-def predict_image(
-    image_path: str,
-    model_path: str = config.BEST_MODEL_PATH,
-    model_name: str = config.MODEL_NAME,
-):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    df, label_encoder = load_data(config.DATA_PATH)
-    test_transform = get_transforms(config.IMG_SIZE, augment=False)
-
-    num_classes = len(df["labels"].unique())
-    model = create_model(model_name, num_classes, pretrained=False).to(device)
-    model.load_state_dict(torch.load(model_path, weights_only=True))
-    model.eval()
-
-    image = Image.open(image_path).convert("RGB")
-    image_tensor = test_transform(image)
-
-    pred = predict(model, image_tensor, device)
-    return label_encoder.inverse_transform([pred])[0]
+    print("\nTraining complete! You can now:")
+    print("  - Run inference: python inference.py <image_path>")
+    print("  - Launch web app: python app.py")
 
 
 if __name__ == "__main__":

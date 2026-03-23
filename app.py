@@ -1,13 +1,25 @@
 import os
+from typing import List, Tuple, Dict
+
 import gradio as gr
 import torch
+import numpy as np
 from PIL import Image
 
 import config
 from src import create_model, get_transforms, load_data
 
 
+model = None
+label_encoder = None
+transform = None
+device = None
+all_classes = []
+
+
 def load_classifier():
+    global model, label_encoder, transform, device, all_classes
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model_path = (
@@ -25,86 +37,117 @@ def load_classifier():
     if not os.path.exists(config.DATA_PATH):
         raise FileNotFoundError(
             f"Data not found at {config.DATA_PATH}. "
-            "Please download the dataset first by running: python scripts/download_data.py"
+            "Please download and consolidate datasets first."
         )
 
     df, label_encoder = load_data(config.DATA_PATH)
     num_classes = len(df["labels"].unique())
+    all_classes = list(label_encoder.classes_)
 
-    model = create_model(config.MODEL_NAME, num_classes, pretrained=False).to(device)
+    model = create_model(
+        config.MODEL_NAME, num_classes, pretrained=False, dropout=0.0
+    ).to(device)
     model.load_state_dict(torch.load(model_path, weights_only=True))
     model.eval()
 
     transform = get_transforms(config.IMG_SIZE, augment=False)
 
-    return model, label_encoder, transform, device
+    return num_classes
 
 
-def classify_image(image: Image.Image):
+def get_predictions(image_tensor, top_k: int = 5) -> List[Tuple[str, float]]:
+    with torch.no_grad():
+        image_tensor = image_tensor.to(device).unsqueeze(0)
+        logits = model(image_tensor)
+        probs = torch.softmax(logits, dim=1)[0]
+
+        top_probs, top_indices = torch.topk(probs, min(top_k, len(probs)))
+
+        results = []
+        for prob, idx in zip(top_probs.cpu().numpy(), top_indices.cpu().numpy()):
+            class_name = label_encoder.inverse_transform([idx])[0]
+            results.append((class_name, float(prob)))
+
+    return results
+
+
+def classify_image(image: Image.Image, top_k: int):
     if image is None:
         return {}, "No image provided"
 
     image_rgb = image.convert("RGB")
     image_tensor = transform(image_rgb)
 
-    with torch.no_grad():
-        image_tensor = image_tensor.to(device).unsqueeze(0)
-        logits = model(image_tensor)
-        probs = torch.softmax(logits, dim=1)[0]
+    predictions = get_predictions(image_tensor, top_k)
 
-    class_probs = {
-        label: float(prob)
-        for label, prob in zip(label_encoder.classes_, probs.cpu().numpy())
-    }
+    class_probs = {cls: prob for cls, prob in predictions}
 
-    prediction = label_encoder.inverse_transform([torch.argmax(probs, dim=0).item()])[0]
+    for cls in all_classes:
+        if cls not in class_probs:
+            class_probs[cls] = 0.0
 
-    return class_probs, f"Prediction: {prediction}"
+    result_text = "**Top Predictions:**\n\n"
+    for cls, prob in predictions:
+        bar_len = int(prob * 20)
+        bar = "█" * bar_len + "░" * (20 - bar_len)
+        result_text += f"**{cls}**: {bar} {prob:.1%}\n\n"
+
+    return class_probs, result_text
 
 
 css = """
-.gradio-container {max-width: 800px !important; margin: auto !important;}
-.prediction-label {font-size: 24px !important; font-weight: bold !important; text-align: center !important;}
-.confidence-bar {height: 30px !important;}
+.gradio-container {max-width: 900px !important; margin: auto !important;}
+.prediction-label {font-size: 20px !important; font-weight: bold !important;}
+.confidence-bar {height: 24px !important; border-radius: 4px;}
+.result-box {padding: 15px; border-radius: 10px; background: #f8f9fa;}
 """
 
 
 try:
-    model, label_encoder, transform, device = load_classifier()
+    num_classes = load_classifier()
     print(f"Model loaded successfully on {device}")
+    print(f"Number of classes: {num_classes}")
 except FileNotFoundError as e:
     print(f"Error: {e}")
     print("\nTo fix this:")
-    print("1. Download data: python scripts/download_data.py")
+    print("1. Consolidate datasets: python scripts/consolidate_datasets.py")
     print("2. Train model: python main.py")
     exit(1)
 
 
 def create_demo():
-    with gr.Blocks(css=css, title="Animal Face Classifier") as demo:
-        gr.Markdown("# Animal Face Classifier")
+    with gr.Blocks(css=css, title="Animal Classifier") as demo:
+        gr.Markdown("# Animal Classifier")
         gr.Markdown(
-            "Upload an image to classify it as **cat**, **dog**, or **wild** animal"
+            f"Classifies images into **{num_classes}** animal categories. "
+            "Upload an image to see top predictions with confidence scores."
         )
 
         with gr.Row():
-            with gr.Column():
+            with gr.Column(scale=1):
                 image_input = gr.Image(type="pil", label="Upload Image")
-                classify_btn = gr.Button("Classify", variant="primary")
+                top_k_slider = gr.Slider(
+                    minimum=1,
+                    maximum=min(10, num_classes),
+                    value=5,
+                    step=1,
+                    label="Show Top K Predictions",
+                )
+                classify_btn = gr.Button("Classify", variant="primary", size="lg")
 
-            with gr.Column():
-                prediction_output = gr.Label(num_top_classes=3, label="Prediction")
-                prediction_text = gr.Textbox(
-                    label="Result",
-                    lines=1,
-                    interactive=False,
-                    elem_classes=["prediction-label"],
+            with gr.Column(scale=1):
+                prediction_output = gr.Label(
+                    num_top_classes=config.TOP_K_PREDICTIONS, label="Predictions"
+                )
+                result_text = gr.Markdown(
+                    value="*Upload an image and click Classify to see predictions*",
+                    elem_classes=["result-box"],
                 )
 
         classify_btn.click(
             fn=classify_image,
-            inputs=[image_input],
-            outputs=[prediction_output, prediction_text],
+            inputs=[image_input, top_k_slider],
+            outputs=[prediction_output, result_text],
         )
 
         gr.Markdown(
@@ -113,7 +156,7 @@ def create_demo():
             **Model Info:**
             - Device: {device}
             - Model: {config.MODEL_NAME}
-            - Classes: {", ".join(label_encoder.classes_)}
+            - Classes: {num_classes}
             - Image Size: {config.IMG_SIZE}x{config.IMG_SIZE}
             """
         )

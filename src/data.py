@@ -18,19 +18,39 @@ def load_data(data_path: str) -> Tuple[pd.DataFrame, LabelEncoder]:
     labels: List[str] = []
 
     first_level = os.listdir(data_path)
+
     if len(first_level) == 1 and os.path.isdir(os.path.join(data_path, first_level[0])):
         data_path = os.path.join(data_path, first_level[0])
+        first_level = os.listdir(data_path)
 
-    for split_dir in os.listdir(data_path):
-        split_path = os.path.join(data_path, split_dir)
-        if not os.path.isdir(split_path):
-            continue
-        for label in os.listdir(split_path):
-            label_path = os.path.join(split_path, label)
+    has_splits = any(
+        s in ["train", "val", "test", "training", "validation"] for s in first_level
+    )
+
+    if has_splits:
+        for split_dir in os.listdir(data_path):
+            split_path = os.path.join(data_path, split_dir)
+            if not os.path.isdir(split_path):
+                continue
+            for label in os.listdir(split_path):
+                label_path = os.path.join(split_path, label)
+                if not os.path.isdir(label_path):
+                    continue
+                for image in os.listdir(label_path):
+                    if image.lower().endswith(
+                        (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp")
+                    ):
+                        image_paths.append(os.path.join(label_path, image))
+                        labels.append(label)
+    else:
+        for label in os.listdir(data_path):
+            label_path = os.path.join(data_path, label)
             if not os.path.isdir(label_path):
                 continue
             for image in os.listdir(label_path):
-                if image.lower().endswith((".png", ".jpg", ".jpeg")):
+                if image.lower().endswith(
+                    (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp")
+                ):
                     image_paths.append(os.path.join(label_path, image))
                     labels.append(label)
 
@@ -41,26 +61,55 @@ def load_data(data_path: str) -> Tuple[pd.DataFrame, LabelEncoder]:
 
 
 def split_data(
-    df: pd.DataFrame, train_split: float, val_split: float
+    df: pd.DataFrame, train_split: float, val_split: float, random_state: int = 42
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    train = df.sample(frac=train_split, random_state=42)
-    test = df.drop(train.index)
-    val = test.sample(frac=0.5, random_state=42)
-    test = test.drop(val.index)
-    return train, val, test
+    from sklearn.model_selection import train_test_split
+
+    train, temp = train_test_split(
+        df,
+        test_size=(1 - train_split),
+        random_state=random_state,
+        stratify=df["labels"],
+    )
+    val_ratio = val_split / (val_split + (1 - train_split))
+    val, test = train_test_split(
+        temp,
+        test_size=(1 - val_ratio),
+        random_state=random_state,
+        stratify=temp["labels"],
+    )
+    return (
+        train.reset_index(drop=True),
+        val.reset_index(drop=True),
+        test.reset_index(drop=True),
+    )
 
 
-def get_transforms(img_size: int, augment: bool = False):
+def get_transforms(
+    img_size: int, augment: bool = False, for_heavy_augment: bool = False
+):
     base_transforms: List = [transforms.Resize((img_size, img_size))]
 
     if augment:
         base_transforms.extend(
             [
                 transforms.RandomHorizontalFlip(p=0.5),
-                transforms.RandomRotation(15),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+                transforms.RandomRotation(20),
+                transforms.ColorJitter(
+                    brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1
+                ),
             ]
         )
+
+        if for_heavy_augment:
+            base_transforms.extend(
+                [
+                    transforms.RandomAffine(
+                        degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)
+                    ),
+                    transforms.RandomPerspective(distortion_scale=0.2, p=0.3),
+                ]
+            )
 
     base_transforms.extend(
         [
